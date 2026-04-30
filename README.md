@@ -1,7 +1,7 @@
 # snapshot-scanner
 
 A standalone Rust binary that seeds a Solana MEV engine's pool graph at startup
-by scanning full Agave validator snapshots directly — across 10 DEX protocols,
+by scanning full Agave validator snapshots directly — across 8 DEX protocols,
 in parallel, with sub-second latency on modern NVMe hardware.
 
 ---
@@ -86,8 +86,6 @@ No validator behavior changes. Visibility only.
 | Meteora DAMM V1 | `Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB` |
 | Meteora DAMM V2 | `cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG` |
 | PumpSwap | `pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA` |
-| PancakeSwap | `6MLxLqofvEgqqoYnVzcW4B2NLMHKbvHqAiV9bHuDqg5t` |
-| Humidifi | `HUMIDxKRmBpWqRZMRusFmHGMCJrGC3xbXVhezQfMgK9J` |
 
 Byreal support pending confirmed program ID.
 

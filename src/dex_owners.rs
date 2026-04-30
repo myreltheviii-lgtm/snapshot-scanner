@@ -11,7 +11,7 @@ use std::str::FromStr;
 ///
 /// When Byreal ID is confirmed: add it to `ids` and bump EXPECTED_COUNT to 11.
 pub fn dex_owners() -> HashSet<Pubkey> {
-    const EXPECTED_COUNT: usize = 10;
+    const EXPECTED_COUNT: usize = 8;
 
     let ids: &[&str] = &[
         // Raydium V4 (AMM)
@@ -30,10 +30,6 @@ pub fn dex_owners() -> HashSet<Pubkey> {
         "cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG",
         // PumpSwap
         "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA",
-        // PancakeSwap
-        "6MLxLqofvEgqqoYnVzcW4B2NLMHKbvHqAiV9bHuDqg5t",
-        // Humidifi
-        "HUMIDxKRmBpWqRZMRusFmHGMCJrGC3xbXVhezQfMgK9J",
         // Byreal — TODO: replace placeholder with confirmed program ID, bump EXPECTED_COUNT = 11
         // "BYREAL_PROGRAM_ID_HERE",
     ];
