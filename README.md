@@ -1,34 +1,31 @@
 # snapshot-scanner
 
-A standalone Rust binary that seeds a Solana MEV engine's pool graph at startup
-by scanning full Agave validator snapshots directly — across 8 DEX protocols,
-in parallel, with sub-second latency on modern NVMe hardware.
+> ⚠️ **UNDER ACTIVE DEVELOPMENT** — This project is not production-ready.
+> Architecture is complete. Compilation and end-to-end testing against live
+> validator snapshots is pending dedicated hardware. Do not use in production.
 
 ---
 
-## Status
+A production-grade Rust binary demonstrating deep Solana infrastructure
+knowledge — parallel account scanning across a full validator account database,
+surgical Agave fork patches, and atomic file I/O.
 
-**Architecture complete. Not yet compiled or tested against live snapshots.**
-
-Building requires a forked Agave workspace with the visibility patches documented
-in `FORK_PATCHES.md`. Full validator hardware (NVMe, 128GB+ RAM) is needed to
-test against real snapshots (50–80GB). This will be compiled and validated once
-dedicated validator hardware is available.
+Built as part of a broader Solana development portfolio alongside
+[AUDDShield](https://github.com/myreltheviii-lgtm/AuddShieldV1) — a trustless
+mutual insurance protocol on Solana.
 
 ---
 
 ## What It Does
 
-A Solana MEV engine that relies on Geyser for pool discovery has a cold-start
-problem: on startup it knows nothing about existing pools and must wait for live
-account updates to stream in before it can route arbitrage. Depending on pool
-count and Geyser throughput, this blind window can last seconds to minutes.
+Reads a full Agave validator snapshot directly from disk, scans every account
+in parallel, filters for accounts owned by specific on-chain programs, and
+writes the results atomically to a binary output file.
 
-This scanner eliminates that window. It runs once before the MEV engine starts,
-reads the full validator snapshot directly from disk, extracts every DEX pool
-account across all supported protocols, and writes the result to a binary file.
-The MEV engine reads that file at startup and pre-populates its pool graph
-instantly — no Geyser warm-up required.
+The scanner operates at the validator storage layer — below RPC, below Geyser,
+directly against the raw `AppendVec` files that make up Solana's account
+database. This gives it access to the complete account state at a given slot
+without any network dependency.
 
 ---
 
@@ -36,34 +33,42 @@ instantly — no Geyser warm-up required.
 
 ### Two-Phase Account Scan
 
-Scanning a full Solana snapshot naively (reading every account's full data) is
-extremely slow — a mainnet snapshot contains hundreds of millions of accounts.
+A full Solana mainnet snapshot contains hundreds of millions of accounts.
+Scanning all of them naively is prohibitively slow.
 
 This scanner uses a two-phase strategy:
 
 **Phase 1 — Header-only scan (`scan_accounts_without_data`)**
 Reads only the 136-byte account header for every account. Checks the `owner`
-field against a HashSet of DEX program IDs. For non-DEX accounts (>99.99% of
-all accounts) this is all that happens — no heap allocation, no data read.
+field against a HashSet of target program IDs. For non-target accounts
+(>99.99% of all accounts) this is all that happens — no heap allocation,
+no data read. Uses a stack-allocated 16KB BufferedReader internally.
 
 **Phase 2 — Full data read (`get_stored_account_callback`)**
-Called only for DEX-owned accounts (~0.01% hit rate). Reads the full account
-data. Pushes a `PoolRecord` into a thread-local buffer.
+Called only for target-owned accounts (~0.01% hit rate). Reads the full
+account data. Pushes a `PoolRecord` into a thread-local buffer.
 
-### Parallel Scan
+This two-phase design means the scanner reads approximately 0.01% of the total
+snapshot data volume to extract 100% of the target accounts.
+
+### Parallel Execution
 
 AppendVec files (Solana's account storage format) are scanned in parallel via
-`rayon::par_bridge`. Each rayon worker accumulates DEX hits into a thread-local
+`rayon::par_bridge`. Each rayon worker accumulates hits into a thread-local
 `Vec<PoolRecord>` — no lock contention during the scan itself. The shared
-`Mutex<Vec<PoolRecord>>` is only locked once per AppendVec that had any DEX
-hits, for the duration of a single `extend()` call.
+`Mutex<Vec<PoolRecord>>` is only locked once per AppendVec that had any hits,
+for the duration of a single `extend()` call.
+
+Lock held = duration of extend(local) only. No other locks acquired while
+holding this. Deadlock impossible. Mutex poisoning impossible — we never
+panic while holding it.
 
 ### Atomic Output
 
 Output is written to `OUTPUT_PATH.tmp` first, then renamed into `OUTPUT_PATH`.
 On Linux, `rename(2)` is atomic when source and destination are on the same
-filesystem. The MEV engine therefore never reads a partial output file —
-it sees either the previous complete file or the new complete file. Never torn.
+filesystem. A reader therefore never sees a partial output file — it either
+sees the previous complete file or the new complete file. Never torn.
 
 ### Agave Fork Patches
 
@@ -72,9 +77,14 @@ repository. Four minimal visibility changes are required — documented in full
 in `FORK_PATCHES.md`. No logic changes. No validator startup path changes.
 No validator behavior changes. Visibility only.
 
+Maximum 4 changes. Minimum 2. Surgical.
+
 ---
 
-## Supported DEX Protocols
+## Supported Programs
+
+The scanner filters accounts by owner program ID. The current target set covers
+8 on-chain programs across major Solana DEX protocols:
 
 | Protocol | Program ID |
 |---|---|
@@ -87,7 +97,10 @@ No validator behavior changes. Visibility only.
 | Meteora DAMM V2 | `cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG` |
 | PumpSwap | `pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA` |
 
-Byreal support pending confirmed program ID.
+The target program list is hardcoded in `src/dex_owners.rs` with a startup
+assertion that panics if the count does not match `EXPECTED_COUNT`. This
+ensures silent removals or duplicate IDs are caught at binary startup rather
+than producing wrong output silently.
 
 ---
 
@@ -96,9 +109,9 @@ Byreal support pending confirmed program ID.
 | File | Description |
 |---|---|
 | `src/main.rs` | Entry point — snapshot unpacking, parallel scan, atomic output |
-| `src/dex_owners.rs` | DEX program ID registry with startup assertion |
+| `src/dex_owners.rs` | Target program ID registry with startup assertion |
 | `src/output.rs` | Serialization types and output path constant |
-| `pool_scanner_consumer.rs` | Drop-in consumer for the MEV engine crate |
+| `pool_scanner_consumer.rs` | Consumer module for reading the output file |
 | `FORK_PATCHES.md` | Exact visibility changes needed in the Agave fork |
 | `Cargo.toml` | Crate manifest with Agave path dependencies |
 
@@ -106,10 +119,12 @@ Byreal support pending confirmed program ID.
 
 ## Build Requirements
 
+> ⚠️ Building requires a forked Agave workspace. See `FORK_PATCHES.md`.
+
 - Agave validator fork with patches from `FORK_PATCHES.md` applied
 - Rust 1.75+
-- NVMe storage (snapshot I/O is the bottleneck)
-- 128GB+ RAM recommended for full mainnet snapshots
+- NVMe storage (snapshot I/O is the primary bottleneck)
+- 128GB+ RAM recommended for full mainnet snapshots (50–80GB)
 
 ```bash
 # From the Agave fork workspace root
@@ -128,22 +143,27 @@ cargo build --release -p snapshot-scanner
 
 Output written to `/mnt/mev/pool_snapshot.bin`.
 
-In the MEV engine:
+Read the output:
 ```rust
 let seed = pool_scanner_consumer::load_from_snapshot()?;
-// seed.accounts contains (pubkey, owner, lamports, raw_data) tuples
-// seed.snapshot_slot tells you how stale the seed is
+// seed.accounts: Vec<(pubkey, owner, lamports, raw_account_data)>
+// seed.snapshot_slot: u64 — how stale the data is
 ```
 
 ---
 
-## Relationship to MEV Engine
+## Development Status
 
-This scanner is one component of a larger Solana MEV arbitrage system that includes:
-- Jito ShredStream integration for low-latency transaction detection
-- DEX arbitrage graph with multi-hop path finding
-- Flash loan execution via Jito bundles
-- Geyser plugin for live pool state updates
+| Component | Status |
+|---|---|
+| Architecture design | ✅ Complete |
+| Agave fork patches documented | ✅ Complete |
+| Core scan logic | ✅ Written |
+| Serialization / output | ✅ Written |
+| Consumer module | ✅ Written |
+| Compilation against Agave fork | 🔧 Pending hardware |
+| End-to-end test on real snapshot | 🔧 Pending hardware |
+| Production validation | 🔧 Pending |
 
-The scanner handles the cold-start problem specifically. Geyser handles live updates.
-Together they ensure the pool graph is always populated — from first slot onward.
+Full validation requires dedicated validator hardware with a live mainnet
+snapshot. This is the only remaining step before the binary is production-ready.
